@@ -152,8 +152,14 @@ bool SDL2Window::process_sdl_events()
 				return false;
 			case SDL_KEYDOWN:
 				if (event.key.keysym.sym == SDLK_ESCAPE) {
-					request_end(core::yuri_exit_interrupted);
-					return false;
+					// If fullscreen, exit fullscreen first; otherwise quit
+					if (window_fullscreen_) {
+						window_fullscreen_ = false;
+						SDL_SetWindowFullscreen(window_.get(), 0);
+					} else {
+						request_end(core::yuri_exit_interrupted);
+						return false;
+					}
 				} else if (event.key.keysym.sym == 'f') {
 					window_fullscreen_ = !window_fullscreen_;
 					SDL_SetWindowFullscreen(window_.get(), window_fullscreen_?SDL_WINDOW_FULLSCREEN_DESKTOP:0);

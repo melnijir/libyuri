@@ -78,15 +78,17 @@ void add_stream(StreamDescription *output_stream, AVFormatContext *fmt_ctx, cons
                     codec_ctx->sample_rate = output_stream->sample_rate;
             }
         }
-        codec_ctx->channel_layout = AV_CH_LAYOUT_STEREO; // For streaming we always prefer stereo - mono goes to center speaker and make strange noise on YouTube
-        if ((*codec)->channel_layouts) {
-            codec_ctx->channel_layout = (*codec)->channel_layouts[0];
-            for (size_t i = 0; (*codec)->channel_layouts[i]; i++) {
-                if ((*codec)->channel_layouts[i] == AV_CH_LAYOUT_STEREO)
-                    codec_ctx->channel_layout = AV_CH_LAYOUT_STEREO;
+        // FFmpeg 7+ uses ch_layout instead of channel_layout/channels
+        av_channel_layout_default(&codec_ctx->ch_layout, 2); // Default to stereo
+        if ((*codec)->ch_layouts) {
+            av_channel_layout_copy(&codec_ctx->ch_layout, &(*codec)->ch_layouts[0]);
+            for (int i = 0; (*codec)->ch_layouts[i].nb_channels; i++) {
+                if ((*codec)->ch_layouts[i].nb_channels == 2) {
+                    av_channel_layout_copy(&codec_ctx->ch_layout, &(*codec)->ch_layouts[i]);
+                    break;
+                }
             }
         }
-        codec_ctx->channels = av_get_channel_layout_nb_channels(codec_ctx->channel_layout);
         output_stream->stream->time_base = av_make_q(1, codec_ctx->sample_rate);
         codec_ctx->time_base = output_stream->stream->time_base;
         break;
@@ -129,13 +131,14 @@ AVFrame *alloc_video_frame(enum AVPixelFormat pix_fmt, int width, int height) {
     return frame;
 }
 
-AVFrame *alloc_audio_frame(enum AVSampleFormat sample_fmt, uint64_t channel_layout, int sample_rate, int nb_samples) {
+AVFrame *alloc_audio_frame(enum AVSampleFormat sample_fmt, const AVChannelLayout *ch_layout, int sample_rate, int nb_samples) {
     AVFrame *frame = av_frame_alloc();
     int ret;
     if (!frame)
         throw(std::runtime_error("Error allocating an audio frame."));
     frame->format = sample_fmt;
-    frame->channel_layout = channel_layout;
+    // FFmpeg 7+ uses ch_layout instead of channel_layout
+    av_channel_layout_copy(&frame->ch_layout, ch_layout);
     frame->sample_rate = sample_rate;
     frame->nb_samples = nb_samples;
     if (nb_samples) {
@@ -250,9 +253,9 @@ void open_audio(const AVCodec *codec, StreamDescription *output_stream, AVDictio
     else
         nb_samples = codec_ctx->frame_size;
     
-    output_stream->frame     = alloc_audio_frame(codec_ctx->sample_fmt, codec_ctx->channel_layout,
+    output_stream->frame     = alloc_audio_frame(codec_ctx->sample_fmt, &codec_ctx->ch_layout,
                                codec_ctx->sample_rate, nb_samples);
-    output_stream->tmp_frame = alloc_audio_frame(output_stream->audio_format, output_stream->channel_layout,
+    output_stream->tmp_frame = alloc_audio_frame(output_stream->audio_format, &output_stream->ch_layout,
                                output_stream->sample_rate, nb_samples);
 
     ret = avcodec_parameters_from_context(output_stream->stream->codecpar, codec_ctx);
@@ -263,11 +266,11 @@ void open_audio(const AVCodec *codec, StreamDescription *output_stream, AVDictio
     output_stream->swr_ctx = swr_alloc();
     if (!output_stream->swr_ctx)
         throw(std::runtime_error("Could not allocate resampler context."));
-    // set options
-    av_opt_set_int       (output_stream->swr_ctx, "in_channel_count",   output_stream->channels,     0);
+    // set options - FFmpeg 7+ uses ch_layout
+    av_opt_set_chlayout  (output_stream->swr_ctx, "in_chlayout",        &output_stream->ch_layout,   0);
     av_opt_set_int       (output_stream->swr_ctx, "in_sample_rate",     output_stream->sample_rate,  0);
     av_opt_set_sample_fmt(output_stream->swr_ctx, "in_sample_fmt",      output_stream->audio_format, 0);
-    av_opt_set_int       (output_stream->swr_ctx, "out_channel_count",  codec_ctx->channels,         0);
+    av_opt_set_chlayout  (output_stream->swr_ctx, "out_chlayout",       &codec_ctx->ch_layout,       0);
     av_opt_set_int       (output_stream->swr_ctx, "out_sample_rate",    codec_ctx->sample_rate,      0);
     av_opt_set_sample_fmt(output_stream->swr_ctx, "out_sample_fmt",     codec_ctx->sample_fmt,       0);
     // initialize the resampling context
@@ -343,7 +346,8 @@ void AVOutput::initialize() {
         audio_st_.sample_rate = yuri_audio_frame_->get_sampling_frequency();
         audio_st_.bitrate = audio_bitrate_;
         audio_st_.channels = yuri_audio_frame_->get_channel_count();
-        audio_st_.channel_layout = (audio_st_.channels == 1) ? AV_CH_LAYOUT_MONO : AV_CH_LAYOUT_STEREO;
+        // FFmpeg 7+ uses ch_layout instead of channel_layout
+        av_channel_layout_default(&audio_st_.ch_layout, audio_st_.channels);
         audio_st_.audio_format = libav::avsampleformat_from_yuri(yuri_audio_frame_->get_format());
         #if defined(__arm__) || defined(__aarch64__)
         // Should be Raspberry specific, not all arm, AAC codec seems to be broken in current Raspbian

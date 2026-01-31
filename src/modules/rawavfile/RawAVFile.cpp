@@ -29,6 +29,8 @@
 extern "C" {
 #include <libswresample/swresample.h>
 #include <libavutil/pixdesc.h>
+#include <libavutil/opt.h>
+#include <libavutil/channel_layout.h>
 #include <libavcodec/codec_desc.h>
 }
 
@@ -95,12 +97,11 @@ namespace yuri {
                 swr_ctx.reset(swr_alloc());
                 libav::set_opt(swr_ctx.get(), "isf", ctx->sample_fmt, 0);
                 libav::set_opt(swr_ctx.get(), "osf", audio_fmt_libav, 0);
-                libav::set_opt(swr_ctx.get(), "icl", ctx->channel_layout, 0);
-                libav::set_opt(swr_ctx.get(), "ocl", ctx->channel_layout, 0);
+                // FFmpeg 7+ uses ch_layout instead of channel_layout/channels
+                av_opt_set_chlayout(swr_ctx.get(), "in_chlayout", &ctx->ch_layout, 0);
+                av_opt_set_chlayout(swr_ctx.get(), "out_chlayout", &ctx->ch_layout, 0);
                 libav::set_opt(swr_ctx.get(), "isr", ctx->sample_rate, 0);
                 libav::set_opt(swr_ctx.get(), "osr", sample_rate, 0);
-                libav::set_opt(swr_ctx.get(), "ich", ctx->channels, 0);
-                libav::set_opt(swr_ctx.get(), "och", ctx->channels, 0);
 
                 swr_init(swr_ctx.get());
             }

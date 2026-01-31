@@ -44,7 +44,12 @@ add_subdirectory(merge_frames)
 add_subdirectory(mix)
 add_subdirectory(mjpeg_to_jpeg)
 add_subdirectory(mosaic)
-add_subdirectory(ndi)
+
+find_package(NDI)
+IF(NDI_FOUND)
+	add_subdirectory(ndi)
+ENDIF()
+
 add_subdirectory(null)
 add_subdirectory(osc)
 add_subdirectory(overlay)
@@ -273,17 +278,16 @@ endif ()
 # Experimental modules
 #################################################################
 
-IF(YURI_BUILD_EXPERIMENTAL_MODULES) 
+IF(YURI_BUILD_EXPERIMENTAL_MODULES)
 
 find_package( Boost 1.46 COMPONENTS regex)
-
+find_library(JSONCPP_LIBRARY jsoncpp)
 
 IF (Boost_REGEX_FOUND)
 	add_subdirectory(webserver)
 	add_subdirectory(file_picker)
 ENDIF()
 
-find_library(JSONCPP_LIBRARY jsoncpp)
 IF(JSONCPP_LIBRARY)
 	add_subdirectory(json_config)
 ENDIF()

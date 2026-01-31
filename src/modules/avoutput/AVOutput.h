@@ -18,6 +18,7 @@ extern "C" {
 #include <libavutil/opt.h>
 #include <libavutil/mathematics.h>
 #include <libavutil/timestamp.h>
+#include <libavutil/channel_layout.h>
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
@@ -43,7 +44,7 @@ struct StreamDescription {
     AVPixelFormat  video_format;   // Video only
     int            sample_rate;    // Audio only
     size_t         channels;       // Audio only
-    uint64_t       channel_layout; // Audio only
+    AVChannelLayout ch_layout;     // Audio only - FFmpeg 7+ uses ch_layout
     AVSampleFormat audio_format;   // Audio only
 };
 
