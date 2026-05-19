@@ -38,7 +38,7 @@ DeckLink3DVideoFrame::DeckLink3DVideoFrame(size_t width, size_t height, BMDPixel
 
 DeckLink3DVideoFrame::~DeckLink3DVideoFrame()
 {
-
+	delete[] buffer;
 }
 
 long DeckLink3DVideoFrame::GetWidth ()
@@ -72,12 +72,16 @@ HRESULT DeckLink3DVideoFrame::GetBytes (void **buffer)
 
 HRESULT STDMETHODCALLTYPE DeckLink3DVideoFrame::QueryInterface(REFIID iid, void **ppv)
 {
-	//int id = iid.byte0;
-	//std::cerr << "QueryInterface " << hex << id<< dec << ": " << __FILE__ << ":" << __LINE__ << std::endl;
-	if (iid == IID_IDeckLinkVideoFrame3DExtensions)	{
+	if (iid == IID_IDeckLinkVideoFrame3DExtensions) {
 		*ppv = dynamic_cast<IDeckLinkVideoFrame3DExtensions*>(this);
 		return S_OK;
 	}
+#ifdef DECKLINK_API_NO_FRAME_GETBYTES
+	if (iid == IID_IDeckLinkVideoBuffer) {
+		*ppv = dynamic_cast<IDeckLinkVideoBuffer*>(this);
+		return S_OK;
+	}
+#endif
 	return E_NOINTERFACE;
 }
 HRESULT DeckLink3DVideoFrame::GetTimecode (/* in */ BMDTimecodeFormat /*format*/, /* out */ IDeckLinkTimecode ** /*timecode*/)

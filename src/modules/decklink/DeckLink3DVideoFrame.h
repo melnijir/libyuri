@@ -18,7 +18,11 @@ namespace yuri {
 namespace decklink {
 bool operator==(const REFIID & first, const REFIID & second);
 
-class DeckLink3DVideoFrame: public IDeckLinkVideoFrame, public IDeckLinkVideoFrame3DExtensions{
+#ifdef DECKLINK_API_NO_FRAME_GETBYTES
+class DeckLink3DVideoFrame: public IDeckLinkVideoFrame, public IDeckLinkVideoFrame3DExtensions, public IDeckLinkVideoBuffer {
+#else
+class DeckLink3DVideoFrame: public IDeckLinkVideoFrame, public IDeckLinkVideoFrame3DExtensions {
+#endif
 public:
 	DeckLink3DVideoFrame(size_t width, size_t height, BMDPixelFormat format, BMDFrameFlags flags);
 	virtual ~DeckLink3DVideoFrame();
@@ -35,6 +39,14 @@ public:
 	virtual HRESULT GetAncillaryData (/* out */ IDeckLinkVideoFrameAncillary **ancillary);
     virtual BMDVideo3DPackingFormat Get3DPackingFormat (void);
     virtual HRESULT GetFrameForRightEye (/* out */ IDeckLinkVideoFrame* *rightEyeFrame);
+#ifdef DECKLINK_API_NO_FRAME_GETBYTES
+    // IDeckLinkVideoBuffer — SDK 14.3+ reads output frame pixel data via this interface
+    virtual HRESULT StartAccess(BMDBufferAccessFlags /*flags*/) { return S_OK; }
+    virtual HRESULT EndAccess(BMDBufferAccessFlags /*flags*/) { return S_OK; }
+#ifdef DECKLINK_API_16
+    virtual HRESULT GetSize(uint64_t* size) { *size = static_cast<uint64_t>(height * linesize_); return S_OK; }
+#endif
+#endif
 
     void add_right(std::shared_ptr<DeckLink3DVideoFrame> r);
     void set_packing_format(BMDVideo3DPackingFormat fmt);

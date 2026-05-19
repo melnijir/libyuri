@@ -34,4 +34,15 @@
 #define DECKLINK_API_12
 #endif
 
+#if BLACKMAGIC_DECKLINK_API_VERSION >= 0x0e030000
+// Since API 14.3, GetBytes() was removed from IDeckLinkVideoFrame and moved to IDeckLinkVideoBuffer.
+// Use QueryInterface(IID_IDeckLinkVideoBuffer) + StartAccess/GetBytes/EndAccess to read pixel data.
+#define DECKLINK_API_NO_FRAME_GETBYTES
+#endif
+
+#if BLACKMAGIC_DECKLINK_API_VERSION >= 0x10000000
+// API 16.0: IDeckLinkVideoBuffer gained GetSize().
+#define DECKLINK_API_16
+#endif
+
 #endif /* SRC_MODULES_DECKLINK_DECKLINKAPI_WRAPPER_H_ */

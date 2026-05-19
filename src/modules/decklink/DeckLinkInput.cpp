@@ -16,6 +16,40 @@ namespace yuri {
 
 namespace decklink {
 
+#ifdef DECKLINK_API_NO_FRAME_GETBYTES
+// In DeckLink API >= 14.3, GetBytes() was removed from IDeckLinkVideoFrame.
+// Pixel data is accessed via IDeckLinkVideoBuffer (requires StartAccess/EndAccess).
+// out_handle receives the IDeckLinkVideoBuffer* as void* — call release_frame_bytes()
+// after the data is copied to properly end the access window.
+static HRESULT get_frame_bytes(IDeckLinkVideoFrame* frame, void** buffer, void** out_handle) {
+    IDeckLinkVideoBuffer* vbuf = nullptr;
+    HRESULT res = frame->QueryInterface(IID_IDeckLinkVideoBuffer, reinterpret_cast<void**>(&vbuf));
+    if (res != S_OK) return res;
+    vbuf->StartAccess(bmdBufferAccessRead);
+    res = vbuf->GetBytes(buffer);
+    if (res != S_OK) {
+        vbuf->EndAccess(bmdBufferAccessRead);
+        vbuf->Release();
+        return res;
+    }
+    *out_handle = vbuf;
+    return S_OK;
+}
+static void release_frame_bytes(void* handle) {
+    if (!handle) return;
+    IDeckLinkVideoBuffer* vbuf = static_cast<IDeckLinkVideoBuffer*>(handle);
+    vbuf->EndAccess(bmdBufferAccessRead);
+    vbuf->Release();
+}
+#else
+// In older SDK, GetBytes() on IDeckLinkVideoFrame returns a pointer valid for
+// the duration of the callback — no StartAccess/EndAccess needed.
+static HRESULT get_frame_bytes(IDeckLinkVideoFrame* frame, void** buffer, void** out_handle) {
+    *out_handle = nullptr;
+    return frame->GetBytes(buffer);
+}
+static void release_frame_bytes(void* /*handle*/) {}
+#endif
 
 IOTHREAD_GENERATOR(DeckLinkInput)
 
@@ -82,28 +116,18 @@ HRESULT DeckLinkInput::VideoInputFormatChanged (BMDVideoInputFormatChangedEvents
 	newDisplayMode->GetName(&name);
 	log[log::info] << "New format: " << name << ", " << newDisplayMode->GetWidth() << "x" << newDisplayMode->GetHeight() <<
 				", dom: " << dom;
-	BMDDisplayMode new_mode = newDisplayMode->GetDisplayMode();
 
-	// Disable warning about unused variables..
 	(void)new_format_is_progressive;
 	(void)new_format_is_interlace;
 
-//	if (force_psf && actual_format_is_psf && !new_format_is_psf) {
-//		if (new_format_is_progressive) log[info] << "Requested PsF, but got progressive. getting progressive";
-//		else {
-//			if (interlace_to_progressive.find(new_mode) != interlace_to_progressive.end()) {
-//				new_mode = interlace_to_progressive[new_mode];
-//				if (new_mode == mode) {
-//					log[info] << "Requested Psf, but BMD returned corresponding interlace. Ignoring!";
-//					return S_OK;
-//				}
-//				log[info] << "Wanna PsF, so chenging new mode to progressive";
-//			}
-//		}
-//	}
 	actual_format_is_psf = new_format_is_psf;
-	mode = new_mode;
+	mode = newDisplayMode->GetDisplayMode();
 	current_format_name_ = get_mode_name(mode, actual_format_is_psf);
+
+	// Disable format detection before restart so start_capture() re-enables the input
+	// without bmdVideoInputEnableFormatDetection — otherwise the SDK would re-fire
+	// this callback after every restart, causing an infinite loop.
+	detect_format = false;
 	restart_streams();
 
 	return S_OK;
@@ -137,13 +161,15 @@ HRESULT DeckLinkInput::VideoInputFrameArrived (IDeckLinkVideoInputFrame* videoFr
 		core::pRawVideoFrame frame;
 		yuri::format_t output_format = convert_bm_to_yuri(pixel_format);
 
-		if (videoFrame->GetBytes(reinterpret_cast<void**>(&data))!=S_OK) {
+		void* vbuf = nullptr;
+		if (get_frame_bytes(videoFrame, reinterpret_cast<void**>(&data), &vbuf)!=S_OK) {
 			log[log::error] << "Failed to get data from frame";
 			return S_OK;
 		} else {
 			yuri::size_t data_size = videoFrame->GetRowBytes() * height;
 			//log[log::info] << "Copying " << data_size << " bytes for " << height << " lines, " << videoFrame->GetRowBytes() << " bytes each";
 			frame = core::RawVideoFrame::create_empty(output_format, {width, height}, data, data_size);
+			release_frame_bytes(vbuf);
 			frame->set_duration(value*1_s/scale);
 		}
 		if (audioPacket && audio_pipe>=0) {
@@ -175,7 +201,8 @@ HRESULT DeckLinkInput::VideoInputFrameArrived (IDeckLinkVideoInputFrame* videoFr
 			}
 			uint8_t *data2;
 
-			if (videoFrame->GetBytes(reinterpret_cast<void**>(&data2))!=S_OK) {
+			void* vbuf2 = nullptr;
+			if (get_frame_bytes(rightframe, reinterpret_cast<void**>(&data2), &vbuf2)!=S_OK) {
 				log[log::error] << "Failed to get data for right eye";
 				videoFrame->Release();
 //				ext->Release();
@@ -183,6 +210,7 @@ HRESULT DeckLinkInput::VideoInputFrameArrived (IDeckLinkVideoInputFrame* videoFr
 			} else {
 				yuri::size_t data_size = rightframe->GetRowBytes() * height;
 				core::pRawVideoFrame frame2 = core::RawVideoFrame::create_empty(output_format, {width, height}, data2,data_size);
+				release_frame_bytes(vbuf2);
 				frame2->set_duration(value*1_s/scale);
 				if (output_format) push_frame(1,frame2);//,output_format,width,height,0,1e6*value/scale,0);
 				videoFrame->Release();
@@ -380,8 +408,8 @@ BMDDisplayMode DeckLinkInput::select_next_format()
 bool DeckLinkInput::restart_streams()
 {
 	input->StopStreams();
-//	input->DisableAudioInput();
-//	input->DisableVideoInput();
+	if (audio_enabled) input->DisableAudioInput();
+	input->DisableVideoInput();
 	return start_capture();
 }
 bool DeckLinkInput::set_param(const core::Parameter &p)
