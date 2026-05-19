@@ -101,7 +101,7 @@ inline event::pBasicEvent prepare_yuri_event(const uint32_t id, const char *name
 }
 
 std::vector<core::InputDeviceInfo> PipewireOutput::enumerate() {
-    return enumerate_pipewire("Audio/Sink");
+    return enumerate_pipewire("Audio/Sink", "sink");
 }
 
 void PipewireOutput::on_event(uint32_t id, const char *type, const struct spa_dict *props) {

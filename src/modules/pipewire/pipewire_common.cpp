@@ -149,9 +149,9 @@ static const struct pw_registry_events registry_events = {
     .global_remove = nullptr,
 };
 
-std::vector<core::InputDeviceInfo> enumerate_pipewire(const char *filter) {
+std::vector<core::InputDeviceInfo> enumerate_pipewire(const char *filter, const char *id_name) {
     std::vector<core::InputDeviceInfo> devices;
-	std::vector<std::string> main_param_order = {"index","name","description","nick"};
+	std::vector<std::string> main_param_order = {id_name,"name","description","nick"};
 
     PipewireContext context;
     if (!init_pipewire(context, "pipewire-enum")) return devices;
@@ -177,7 +177,7 @@ std::vector<core::InputDeviceInfo> enumerate_pipewire(const char *filter) {
         device.main_param_order = main_param_order;
         device.device_name = dev.name;
         core::InputDeviceConfig cfg_base;
-        cfg_base.params["index"]=std::to_string(id);
+        cfg_base.params[id_name]=std::to_string(id);
 		cfg_base.params["name"]=dev.name;
         cfg_base.params["description"]=dev.description;
         cfg_base.params["nick"]=dev.nick;

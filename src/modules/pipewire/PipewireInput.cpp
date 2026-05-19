@@ -131,7 +131,7 @@ void PipewireInput::destroy() {
 }
 
 std::vector<core::InputDeviceInfo> PipewireInput::enumerate() {
-    return enumerate_pipewire("Audio/Source");
+    return enumerate_pipewire("Audio/Source", "source");
 }
 
 void PipewireInput::on_event(uint32_t id, const char *type, const struct spa_dict *props) {

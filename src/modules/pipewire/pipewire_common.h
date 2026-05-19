@@ -58,7 +58,7 @@ unsigned int get_yuri_format_bytes(format_t fmt);
 bool init_pipewire(PipewireContext &ctx, const char *name);
 void destroy_pipewire(PipewireContext &ctx);
 void connect_pipewire(PipewireContext &ctx, PipewireBuffers buffers, spa_direction direction, uint32_t target_id);
-std::vector<core::InputDeviceInfo> enumerate_pipewire(const char *filter);
+std::vector<core::InputDeviceInfo> enumerate_pipewire(const char *filter, const char *id_name);
 
 } // namespace pipewire
 } // namespace yuri
