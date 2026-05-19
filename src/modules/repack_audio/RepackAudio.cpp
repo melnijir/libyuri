@@ -77,9 +77,11 @@ core::pFrame RepackAudio::do_special_single_step(core::pRawAudioFrame frame) {
 	current_format_ = frame->get_format();
 	if (current_format_!= core::raw_audio_format::signed_16bit &&
 			current_format_ != core::raw_audio_format::unsigned_16bit &&
+			current_format_ != core::raw_audio_format::signed_24bit   &&
+			current_format_ != core::raw_audio_format::unsigned_24bit &&
 			current_format_ != core::raw_audio_format::signed_32bit   &&
 			current_format_ != core::raw_audio_format::unsigned_32bit) {
-		log[log::warning] << "Unsupported format. Only 16bit/32bit formats supported";
+		log[log::warning] << "Unsupported format. Only 16bit/24bit/32bit formats supported";
 		return {};
 	}
 	if (frame->get_channel_count() != channels_) {
