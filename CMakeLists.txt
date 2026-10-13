@@ -1,4 +1,4 @@
-cmake_minimum_required (VERSION 3.0.0)
+cmake_minimum_required (VERSION 3.5.0)
 PROJECT(yuri2 VERSION 2.8.0 LANGUAGES CXX)
 ENABLE_LANGUAGE(C)
 
@@ -219,7 +219,7 @@ add_subdirectory(doc)
 SET(CPACK_GENERATOR "DEB")
 SET(CPACK_PACKAGE_VENDOR "st.dio s.r.o.")
 SET(CPACK_DEBIAN_PACKAGE_MAINTAINER "<zdenek@stdio.cz>>")
-SET(CPACK_DEBIAN_PACKAGE_DEPENDS "libboost-all-dev, libgl1-mesa-dev, libavcodec-dev, libavformat-dev, libavutil-dev, libjsoncpp-dev")
+SET(CPACK_DEBIAN_PACKAGE_DEPENDS "libboost-all-dev, libgl-dev | libgl1-mesa-dev, libavcodec-dev, libavformat-dev, libavutil-dev, libjsoncpp-dev")
 SET(CPACK_PACKAGE_CHECKSUM SHA256)
 
 # Simple hack to get detailed version
@@ -227,8 +227,10 @@ if(NOT GIT_FOUND)
 	find_package(Git QUIET)
 endif()
 
-SET(GIT_COMMIT_COUNT "")
-if (GIT_FOUND)
+# Package release can be set explicitly (e.g. when building outside of git)
+SET(YURI_PACKAGE_RELEASE "" CACHE STRING "Debian package release, defaults to git commit count")
+SET(GIT_COMMIT_COUNT "${YURI_PACKAGE_RELEASE}")
+if (GIT_FOUND AND NOT YURI_PACKAGE_RELEASE)
 	execute_process(COMMAND
 			${GIT_EXECUTABLE}
 			describe

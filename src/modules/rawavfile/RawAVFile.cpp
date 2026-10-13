@@ -95,12 +95,10 @@ namespace yuri {
                 swr_ctx.reset(swr_alloc());
                 libav::set_opt(swr_ctx.get(), "isf", ctx->sample_fmt, 0);
                 libav::set_opt(swr_ctx.get(), "osf", audio_fmt_libav, 0);
-                libav::set_opt(swr_ctx.get(), "icl", ctx->channel_layout, 0);
-                libav::set_opt(swr_ctx.get(), "ocl", ctx->channel_layout, 0);
+                av_opt_set_chlayout(swr_ctx.get(), "ichl", &ctx->ch_layout, 0);
+                av_opt_set_chlayout(swr_ctx.get(), "ochl", &ctx->ch_layout, 0);
                 libav::set_opt(swr_ctx.get(), "isr", ctx->sample_rate, 0);
                 libav::set_opt(swr_ctx.get(), "osr", sample_rate, 0);
-                libav::set_opt(swr_ctx.get(), "ich", ctx->channels, 0);
-                libav::set_opt(swr_ctx.get(), "och", ctx->channels, 0);
 
                 swr_init(swr_ctx.get());
             }
@@ -580,8 +578,8 @@ Parameter packet should be const, but the woudn't work with the fake ffmpeg (lib
                 try {
                     const auto &fi = core::raw_audio_format::get_format_info(audio_format_out_);
 
-                    size_t data_size = av_frame->nb_samples * av_frame->channels * fi.bits_per_sample / 8;
-                    auto f = core::RawAudioFrame::create_empty(audio_streams_[idx].format_out, av_frame->channels,
+                    size_t data_size = av_frame->nb_samples * av_frame->ch_layout.nb_channels * fi.bits_per_sample / 8;
+                    auto f = core::RawAudioFrame::create_empty(audio_streams_[idx].format_out, av_frame->ch_layout.nb_channels,
                                                                av_frame->sample_rate, av_frame->data[0],
                                                                data_size);
                     if (!f) {
@@ -597,7 +595,7 @@ Parameter packet should be const, but the woudn't work with the fake ffmpeg (lib
             } else {
                 auto output_sample_count = av_rescale_rnd(av_frame->nb_samples, audio_streams_[idx].sample_rate,
                                                           audio_streams_[idx].ctx->sample_rate, AV_ROUND_UP);
-                auto f = core::RawAudioFrame::create_empty(audio_streams_[idx].format_out, av_frame->channels,
+                auto f = core::RawAudioFrame::create_empty(audio_streams_[idx].format_out, av_frame->ch_layout.nb_channels,
                                                            audio_streams_[idx].sample_rate,
                                                            output_sample_count);
                 auto out_buffer = f->data();
@@ -605,7 +603,7 @@ Parameter packet should be const, but the woudn't work with the fake ffmpeg (lib
                 auto ret2 = swr_convert(audio_streams_[idx].swr_ctx.get(), &out_buffer, av_frame->nb_samples, in_buffer,
                                         av_frame->nb_samples);
                 auto real_buffer_size
-                        = av_samples_get_buffer_size(nullptr, av_frame->channels, ret2,
+                        = av_samples_get_buffer_size(nullptr, av_frame->ch_layout.nb_channels, ret2,
                                                      libav::avsampleformat_from_yuri(audio_streams_[idx].format_out),
                                                      1);
                 log[log::verbose_debug] << "Received " << av_frame->nb_samples << " samples, expected to convert to "

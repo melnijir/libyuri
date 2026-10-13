@@ -3,7 +3,8 @@
 #################################################################
 IF(NOT YURI_DISABLE_BOOST)
 	set( Boost_USE_STATIC_LIBS OFF )
-	find_package( Boost 1.49 COMPONENTS filesystem system regex)
+	# boost_system is header-only since 1.69 and the library is gone since 1.89
+	find_package( Boost 1.49 COMPONENTS filesystem regex OPTIONAL_COMPONENTS system)
 	IF(Boost_FILESYSTEM_FOUND)
 		add_definitions(-DHAVE_BOOST_FILESYSTEM)
 	ENDIF()
@@ -38,7 +39,7 @@ ENDIF()
 #################################################################
 # Set up dependencies for libyuri_core
 #################################################################
-IF(Boost_SYSTEM_FOUND)
+IF(Boost_FILESYSTEM_FOUND OR Boost_REGEX_FOUND)
     SET (YURI_LINK ${YURI_LINK} ${Boost_LIBRARY_DIRS} )
     #IF(NOT WIN32)
     SET (YURI_LIBS ${YURI_LIBS}	${Boost_LIBRARIES} )
