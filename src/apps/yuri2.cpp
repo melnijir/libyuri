@@ -111,6 +111,7 @@ int main(int argc, char**argv)
 		("app-info,a","Show info about XML file")
 		("log-file,o", po::value<std::string>(&logfile), "Log to a file")
 		("input,I", po::value<std::string>()->implicit_value("all"), "Enumerate devices")
+		("json", "Machine readable JSON output for --list classes, --class and --input")
 		("date,d", po::value<bool>(&show_date)->implicit_value(true),"Print date in a log")
 		("time,t", po::value<bool>(&show_time)->implicit_value(true), "Print time in a log");
 
@@ -163,6 +164,19 @@ int main(int argc, char**argv)
 		log::Log l_(std::cout);
 		l_.set_flags(log::info);
 		l_.set_quiet(true);
+		if (vm.count("json")) {
+			if (vm.count("class")) {
+				yuri::app::list_classes_json(std::cout, vm["class"].as<std::string>());
+				return 0;
+			} else if (vm.count("input")) {
+				yuri::app::list_input_class_json(std::cout, vm["input"].as<std::string>());
+				return 0;
+			} else if (vm["list"].as<std::string>() == "classes") {
+				yuri::app::list_classes_json(std::cout);
+				return 0;
+			}
+			logger[log::warning] << "--json is supported only for --list classes, --class and --input";
+		}
 		if (vm.count("class")) {
 			std::string class_name = vm["class"].as<std::string>();
 			yuri::app::list_single_class(l_, class_name, verbosity);

@@ -12,6 +12,7 @@
 #include "yuri/log/Log.h"
 #include "yuri/core/parameter/Parameters.h"
 #include <string>
+#include <ostream>
 
 namespace yuri {
 namespace app {
@@ -32,6 +33,10 @@ void list_pipes(yuri::log::Log& l_, int verbosity = 0);
 void list_converters(yuri::log::Log& l_, int verbosity = 0);
 void list_inputs(yuri::log::Log& l_, int verbosity = 0);
 void list_specifiers(yuri::log::Log& l_, int verbosity = 0);
+
+/// Machine readable listings (yuri2 --json)
+void list_classes_json(std::ostream& os, const std::string& name = {});
+void list_input_class_json(std::ostream& os, const std::string& name);
 
 
 

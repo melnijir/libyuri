@@ -26,6 +26,10 @@
 
 #include <map>
 #include <vector>
+#include <sstream>
+#include <iomanip>
+#include <cmath>
+#include <cstdio>
 namespace yuri {
 namespace app {
 
@@ -364,6 +368,209 @@ void list_input_class(yuri::log::Log& l_, const std::string& name, int /*verbosi
 	}
 }
 
+
+
+// ---------------------------------------------------------------- JSON output
+
+namespace {
+
+std::string json_string(const std::string& s)
+{
+	std::string out = "\"";
+	for (const unsigned char c: s) {
+		switch (c) {
+			case '"': out += "\\\""; break;
+			case '\\': out += "\\\\"; break;
+			case '\n': out += "\\n"; break;
+			case '\r': out += "\\r"; break;
+			case '\t': out += "\\t"; break;
+			default:
+				if (c < 0x20) {
+					char buf[8];
+					std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+					out += buf;
+				} else {
+					out += static_cast<char>(c);
+				}
+		}
+	}
+	return out + "\"";
+}
+
+std::string json_number(long double v)
+{
+	if (!std::isfinite(v)) return "null";
+	std::ostringstream ss;
+	ss << std::setprecision(15) << static_cast<double>(v);
+	return ss.str();
+}
+
+std::string json_value(const event::pBasicEvent& ev)
+{
+	if (!ev) return "null";
+	using event::event_type_t;
+	switch (ev->get_type()) {
+		case event_type_t::boolean_event:
+			return event::lex_cast_value<bool>(ev) ? "true" : "false";
+		case event_type_t::integer_event:
+			return std::to_string(std::dynamic_pointer_cast<event::EventInt>(ev)->get_value());
+		case event_type_t::double_event:
+			return json_number(std::dynamic_pointer_cast<event::EventDouble>(ev)->get_value());
+		case event_type_t::vector_event: {
+			std::string out = "[";
+			for (const auto& e: *std::dynamic_pointer_cast<event::EventVector>(ev)) {
+				if (out.size() > 1) out += ",";
+				out += json_value(e);
+			}
+			return out + "]";
+		}
+		case event_type_t::dictionary_event: {
+			std::string out = "{";
+			for (const auto& e: std::dynamic_pointer_cast<event::EventDict>(ev)->get_value()) {
+				if (out.size() > 1) out += ",";
+				out += json_string(e.first) + ":" + json_value(e.second);
+			}
+			return out + "}";
+		}
+		case event_type_t::bang_event:
+			return "null";
+		default:
+			try {
+				return json_string(event::lex_cast_value<std::string>(ev));
+			}
+			catch (std::exception&) {
+				return "null";
+			}
+	}
+}
+
+std::string json_range(const event::pBasicEvent& ev)
+{
+	std::string out;
+	if (!ev) return out;
+	if (ev->get_type() == event::event_type_t::integer_event) {
+		auto r = std::dynamic_pointer_cast<event::EventInt>(ev);
+		if (r->range_min_specified()) out += ",\"min\":" + std::to_string(r->get_min_value());
+		if (r->range_max_specified()) out += ",\"max\":" + std::to_string(r->get_max_value());
+	} else if (ev->get_type() == event::event_type_t::double_event) {
+		auto r = std::dynamic_pointer_cast<event::EventDouble>(ev);
+		if (r->range_min_specified()) out += ",\"min\":" + json_number(r->get_min_value());
+		if (r->range_max_specified()) out += ",\"max\":" + json_number(r->get_max_value());
+	}
+	return out;
+}
+
+std::string json_params(const core::Parameters& params)
+{
+	std::string out = "[";
+	for (const auto& p: params) {
+		const auto& param = p.second;
+		const auto& name = param.get_name();
+		if (name.empty() || name[0] == '_') continue;
+		const auto value = param.get_value();
+		if (out.size() > 1) out += ",";
+		out += "{\"name\":" + json_string(name)
+			+ ",\"type\":" + json_string(value ? event_type_name(value->get_type()) : "undetermined")
+			+ ",\"default\":" + json_value(value)
+			+ json_range(value)
+			+ ",\"description\":" + json_string(param.get_description()) + "}";
+	}
+	return out + "]";
+}
+
+std::string json_class(const std::string& name)
+{
+	const auto& params = IOThreadGenerator::get_instance().configure(name);
+	return "{\"class\":" + json_string(name)
+		+ ",\"description\":" + json_string(params.get_description())
+		+ ",\"params\":" + json_params(params) + "}";
+}
+
+std::string json_devices(const std::string& name)
+{
+	const auto& reg = core::InputRegister::get_instance();
+	std::string out = "{\"class\":" + json_string(name) + ",\"devices\":[";
+	bool first_dev = true;
+	for (const auto& d: reg.find_value(name)()) {
+		if (!first_dev) out += ",";
+		first_dev = false;
+		out += "{\"name\":" + json_string(d.device_name) + ",\"main_param_order\":[";
+		for (size_t i = 0; i < d.main_param_order.size(); ++i) {
+			out += (i ? "," : "") + json_string(d.main_param_order[i]);
+		}
+		out += "],\"configurations\":[";
+		bool first_cfg = true;
+		for (const auto& cfg: d.configurations) {
+			if (!first_cfg) out += ",";
+			first_cfg = false;
+			std::string obj = "{";
+			for (const auto& p: cfg.params) {
+				if (obj.size() > 1) obj += ",";
+				obj += json_string(p.first) + ":" + json_value(p.second.get_value());
+			}
+			out += obj + "}";
+		}
+		out += "]}";
+	}
+	return out + "]}";
+}
+
+}
+
+void list_classes_json(std::ostream& os, const std::string& name)
+{
+	auto& generator = IOThreadGenerator::get_instance();
+	if (!name.empty()) {
+		if (!generator.is_registered(name)) {
+			os << "null" << std::endl;
+			return;
+		}
+		os << json_class(name) << std::endl;
+		return;
+	}
+	os << "[";
+	bool first = true;
+	for (const auto& k: generator.list_keys()) {
+		std::string item;
+		try {
+			item = json_class(k);
+		}
+		catch (std::exception&) {
+			continue;
+		}
+		os << (first ? "" : ",\n") << item;
+		first = false;
+	}
+	os << "]" << std::endl;
+}
+
+void list_input_class_json(std::ostream& os, const std::string& name)
+{
+	const auto& reg = core::InputRegister::get_instance();
+	if (name != "all") {
+		try {
+			os << json_devices(name) << std::endl;
+		}
+		catch (std::exception& e) {
+			os << "{\"class\":" << json_string(name) << ",\"error\":" << json_string(e.what()) << ",\"devices\":[]}" << std::endl;
+		}
+		return;
+	}
+	os << "[";
+	bool first = true;
+	for (const auto& k: reg.list_keys()) {
+		std::string item;
+		try {
+			item = json_devices(k);
+		}
+		catch (std::exception& e) {
+			item = "{\"class\":" + json_string(k) + ",\"error\":" + json_string(e.what()) + ",\"devices\":[]}";
+		}
+		os << (first ? "" : ",\n") << item;
+		first = false;
+	}
+	os << "]" << std::endl;
+}
 
 void list_specifiers(yuri::log::Log& l_, int )
 {
