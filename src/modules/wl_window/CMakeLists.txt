@@ -2,19 +2,21 @@
 SET (MODULE wl_window)
 
 find_program(WAYLAND_SCANNER_EXEC wayland-scanner REQUIRED)
+pkg_get_variable(WAYLAND_PROTOCOLS_DIR wayland-protocols pkgdatadir)
+SET(XDG_SHELL_XML "${WAYLAND_PROTOCOLS_DIR}/stable/xdg-shell/xdg-shell.xml")
 
 SET(XDG_SHELL_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.c")
 SET(XDG_SHELL_HEADER "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-client-protocol.h")
 
 add_custom_command(
 		OUTPUT "${XDG_SHELL_SOURCE}"
-		COMMAND "${WAYLAND_SCANNER_EXEC}" "private-code"  "<" "/usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml" ">" "${XDG_SHELL_SOURCE}"
+		COMMAND "${WAYLAND_SCANNER_EXEC}" "private-code"  "<" "${XDG_SHELL_XML}" ">" "${XDG_SHELL_SOURCE}"
 		COMMENT "Generate XDG shell protocol"
 )
 
 add_custom_command(
 		OUTPUT "${XDG_SHELL_HEADER}"
-		COMMAND "${WAYLAND_SCANNER_EXEC}" "client-header"  "<" "/usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml" ">" "${XDG_SHELL_HEADER}"
+		COMMAND "${WAYLAND_SCANNER_EXEC}" "client-header"  "<" "${XDG_SHELL_XML}" ">" "${XDG_SHELL_HEADER}"
 		COMMENT "Generate XDG shell header"
 )
 
