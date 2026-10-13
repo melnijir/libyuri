@@ -53,26 +53,38 @@ TestCard::~TestCard() noexcept
 
 void TestCard::run()
 {
-	while(still_running()) {
-		core::pRawVideoFrame frame = core::RawVideoFrame::create_empty(core::raw_format::rgba32, resolution_, true);
-		const size_t cnum = pattern_colors.size();
-		auto it = PLANE_DATA(frame,0).begin();
-		for (dimension_t line = 0; line < resolution_.height; ++line) {
-			//dimension_t col = 0;
-			for (dimension_t color = 0; color < cnum; ++color) {
-				uint32_t c = pattern_colors[color];
-				for (dimension_t col = color * resolution_.width / cnum;
-						col < (color+1) * resolution_.width / cnum; ++ col) {
-						*it++ = (c&0xFF0000) >> 16;
-						*it++ = (c&0x00FF00) >>  8;
-						*it++ = (c&0x0000FF) >>  0;
-						*it++ = 0xFF;
-				}
+	// The pattern does not change, generate it once
+	core::pRawVideoFrame frame = core::RawVideoFrame::create_empty(core::raw_format::rgba32, resolution_, true);
+	const size_t cnum = pattern_colors.size();
+	auto it = PLANE_DATA(frame,0).begin();
+	for (dimension_t line = 0; line < resolution_.height; ++line) {
+		for (dimension_t color = 0; color < cnum; ++color) {
+			uint32_t c = pattern_colors[color];
+			for (dimension_t col = color * resolution_.width / cnum;
+					col < (color+1) * resolution_.width / cnum; ++ col) {
+					*it++ = (c&0xFF0000) >> 16;
+					*it++ = (c&0x00FF00) >>  8;
+					*it++ = (c&0x0000FF) >>  0;
+					*it++ = 0xFF;
 			}
+		}
+	}
+
+	// Send frames at the requested rate (fps <= 0: as fast as possible)
+	timestamp_t next_time{};
+	while(still_running()) {
+		if (fps_ > 0) {
+			const auto curtime = timestamp_t{};
+			if (next_time > curtime) {
+				sleep(std::min(get_latency(), next_time - curtime));
+				continue;
+			}
+			next_time = next_time + (1_s / fps_);
 		}
 		push_frame(0, frame);
 	}
 }
+
 bool TestCard::set_param(const core::Parameter& param)
 {
 	if (assign_parameters(param)
