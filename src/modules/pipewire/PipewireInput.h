@@ -42,6 +42,7 @@ private:
 
     PipewireInputContext pipewire_data_;
     size_t source_;
+    std::string target_;
     bool pipewire_ready_;
 };
 

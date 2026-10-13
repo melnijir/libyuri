@@ -23,7 +23,8 @@ IOTHREAD_GENERATOR(PipewireOutput)
 core::Parameters PipewireOutput::configure() {
     core::Parameters p = core::SpecializedIOFilter<core::RawAudioFrame>::configure();
     p.set_description("PipewireOutput");
-    p["sink"]["pipewire sink to use"]=0;
+    p["sink"]["pipewire sink to use (node id, changes between restarts)"]=0;
+    p["target"]["pipewire sink to use by name (node.name, stable); overrides sink"]="";
     return p;
 }
 
@@ -250,6 +251,7 @@ bool PipewireOutput::init() {
         PW_KEY_MEDIA_CATEGORY, "Playback",
         PW_KEY_MEDIA_ROLE, "Production",
         nullptr);
+    if (!target_.empty()) pw_properties_set(props, PW_KEY_TARGET_OBJECT, target_.c_str());
 
     pipewire_data_.context.stream = pw_stream_new_simple(pipewire_data_.context.loop, "audio-dst", props, &stream_events, &pipewire_data_);
     if (!pipewire_data_.context.stream) {
@@ -258,7 +260,7 @@ bool PipewireOutput::init() {
         return false;
     }
 
-    connect_pipewire(pipewire_data_.context, default_buffers, SPA_DIRECTION_OUTPUT, sink_ ? sink_ : PW_ID_ANY);
+    connect_pipewire(pipewire_data_.context, default_buffers, SPA_DIRECTION_OUTPUT, (sink_ && target_.empty()) ? sink_ : PW_ID_ANY);
 
 
     pw_thread_loop_unlock(pipewire_data_.context.thread_loop);
@@ -273,7 +275,8 @@ void PipewireOutput::destroy() {
 
 bool PipewireOutput::set_param(const core::Parameter& param) {
     if (assign_parameters(param) //
-        (sink_, "sink")) {
+        (sink_, "sink")
+        (target_, "target")) {
         return true;
     }
     return core::SpecializedIOFilter<core::RawAudioFrame>::set_param(param);

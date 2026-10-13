@@ -26,7 +26,8 @@ core::Parameters PipewireInput::configure() {
 			formats += name + ", ";
 		}
 	}
-	p["source"]["Pipewire device to use"]="";
+	p["source"]["Pipewire device to use (node id, changes between restarts)"]="";
+	p["target"]["Pipewire source to use by name (node.name, stable); overrides source"]="";
 	p["channels"]["Channel to capture"]=2;
 	p["sample_rate"]["Sample rate to capture"]=48000;
 	p["samples"]["Count of samples captured in one run"]=1024;
@@ -101,13 +102,15 @@ bool PipewireInput::init() {
         return false;
     }
 
-    auto node_latency = (std::to_string(pipewire_data_.context.samples)+"/"+std::to_string(pipewire_data_.context.sample_rate)).c_str();
+    // kept as a std::string: c_str() of a temporary would dangle
+    const std::string node_latency = std::to_string(pipewire_data_.context.samples)+"/"+std::to_string(pipewire_data_.context.sample_rate);
     auto props = pw_properties_new(
         PW_KEY_MEDIA_TYPE, "Audio",
         PW_KEY_MEDIA_CATEGORY, "Capture",
         PW_KEY_MEDIA_ROLE, "Production",
-        PW_KEY_NODE_LATENCY, node_latency,
+        PW_KEY_NODE_LATENCY, node_latency.c_str(),
         nullptr);
+    if (!target_.empty()) pw_properties_set(props, PW_KEY_TARGET_OBJECT, target_.c_str());
 
     pipewire_data_.context.stream = pw_stream_new_simple(pipewire_data_.context.loop, "audio-src", props, &stream_events, &pipewire_data_);
     if (!pipewire_data_.context.stream) {
@@ -117,7 +120,7 @@ bool PipewireInput::init() {
     }
 
     log[log::info] << "Pipewire stream created successfully, samples: " << pipewire_data_.context.samples;
-    connect_pipewire(pipewire_data_.context, default_buffers, SPA_DIRECTION_INPUT, source_ ? source_ : PW_ID_ANY);
+    connect_pipewire(pipewire_data_.context, default_buffers, SPA_DIRECTION_INPUT, (source_ && target_.empty()) ? source_ : PW_ID_ANY);
 
     pw_thread_loop_start(pipewire_data_.context.thread_loop);
     pw_thread_loop_unlock(pipewire_data_.context.thread_loop);
@@ -186,6 +189,7 @@ bool PipewireInput::set_param(const core::Parameter &param) {
     log[log::info] << "Setting parameter: " << param.get_name() << " = " << param.get<std::string>();
     if (assign_parameters(param)
         (source_, "source")
+        (target_, "target")
         (pipewire_data_.context.channels, "channels")
         (pipewire_data_.context.sample_rate, "sample_rate")
         (pipewire_data_.context.samples, "samples")

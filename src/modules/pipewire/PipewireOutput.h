@@ -57,6 +57,7 @@ private:
 
     PipewireOutputContext pipewire_data_;
     size_t sink_;
+    std::string target_;
     size_t sample_size_;
     bool pipewire_ready_;
 
