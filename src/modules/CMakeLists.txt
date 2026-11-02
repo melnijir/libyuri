@@ -277,6 +277,9 @@ pkg_check_modules(WAYLAND_PROTOCOLS wayland-protocols)
 if(WAYLAND_FOUND AND WAYLAND_PROTOCOLS_FOUND)
 	add_subdirectory(wl_window)
 endif ()
+if(WAYLAND_FOUND)
+	add_subdirectory(wl_screen)
+endif ()
 
 #################################################################
 # Experimental modules
