@@ -502,26 +502,32 @@ void draw_part(gl::GL& gl_, int i, core::pFrame frame, bool fx, bool fy, const s
 }
 
 
+/// Shrinks the drawn quad so the image keeps its aspect ratio: black bars left and right
+/// (image narrower than the window) or at the top and bottom (image wider).
+/// Corners: 0 bottom left, 1 bottom right, 2 top right, 3 top left (x, y each).
 std::array<float, 8> fix_corners(const std::array<float, 8>& corners, bool keep_aspect, resolution_t win_size, resolution_t img_size) {
-    if (!keep_aspect) {
+    if (!keep_aspect || !win_size.width || !win_size.height || !img_size.width || !img_size.height) {
         return corners;
     }
     const auto ar_window = static_cast<double>(win_size.width) / win_size.height;
     const auto ar_image = static_cast<double>(img_size.width) / img_size.height;
+    // point at fraction t on the edge from corner a to corner b
+    const auto lerp = [&](size_t a, size_t b, double t, size_t coord) {
+        return static_cast<float>(corners[2 * a + coord] + (corners[2 * b + coord] - corners[2 * a + coord]) * t);
+    };
     auto c = corners;
+    auto set = [&](size_t corner, size_t a, size_t b, double t) {
+        c[2 * corner] = lerp(a, b, t, 0);
+        c[2 * corner + 1] = lerp(a, b, t, 1);
+    };
     if (ar_window > ar_image) {
-        const auto w = ar_image * img_size.height;
-        const auto delta_w = w / static_cast<double>(img_size.width) / 2;
-        c[0] = c[0] + (c[2] - c[0]) * delta_w;
-        c[1] = c[1] + (c[3]- c[1]) * delta_w;
-        c[2] = c[0] + (c[2] - c[0]) * (1.0 - delta_w);
-        c[3] = c[1] + (c[3]- c[1]) * (1.0 - delta_w);
-
-        c[6] = c[6] + (c[4] - c[6]) * delta_w;
-        c[7] = c[7] + (c[5]- c[7]) * delta_w;
-        c[4] = c[6] + (c[4] - c[6]) * (1.0 - delta_w);
-        c[5] = c[6] + (c[5]- c[7]) * (1.0 - delta_w);
-
+        const double m = (1.0 - ar_image / ar_window) / 2;
+        set(0, 0, 1, m); set(1, 0, 1, 1.0 - m);   // bottom edge
+        set(3, 3, 2, m); set(2, 3, 2, 1.0 - m);   // top edge
+    } else if (ar_window < ar_image) {
+        const double m = (1.0 - ar_window / ar_image) / 2;
+        set(0, 0, 3, m); set(3, 0, 3, 1.0 - m);   // left edge
+        set(1, 1, 2, m); set(2, 1, 2, 1.0 - m);   // right edge
     }
     return c;
 }
