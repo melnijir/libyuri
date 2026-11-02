@@ -44,6 +44,9 @@ core::Parameters WlScreen::configure()
 
 struct Output {
 	wl_output* output = nullptr;
+	/// registry name, to notice when the output goes away (display unplugged)
+	uint32_t global = 0;
+	bool removed = false;
 	std::string name;
 	std::string description;
 	int32_t width = 0;
@@ -70,6 +73,7 @@ struct Connection {
 	zwlr_screencopy_manager_v1* manager = nullptr;
 	uint32_t manager_version = 0;
 	std::vector<std::unique_ptr<Output>> outputs;
+	Output* current = nullptr;
 	// shared memory buffer the compositor copies into, reused while the size stays
 	wl_buffer* buffer = nullptr;
 	void* data = nullptr;
@@ -122,13 +126,16 @@ void registry_global(void* data, wl_registry* registry, uint32_t name, const cha
 			wl_registry_bind(registry, name, &zwlr_screencopy_manager_v1_interface, c->manager_version));
 	} else if (std::strcmp(interface, wl_output_interface.name) == 0) {
 		auto o = std::make_unique<Output>();
+		o->global = name;
 		// version 4 tells the output's name (HDMI-A-1)
 		o->output = static_cast<wl_output*>(wl_registry_bind(registry, name, &wl_output_interface, std::min<uint32_t>(version, 4)));
 		wl_output_add_listener(o->output, &output_listener, o.get());
 		c->outputs.push_back(std::move(o));
 	}
 }
-void registry_global_remove(void*, wl_registry*, uint32_t) {}
+void registry_global_remove(void* data, wl_registry*, uint32_t name) {
+	for (auto& o: static_cast<Connection*>(data)->outputs) if (o->global == name) o->removed = true;
+}
 const wl_registry_listener registry_listener = { registry_global, registry_global_remove };
 
 // ---------------------------------------------------------------- screencopy frame
@@ -193,6 +200,19 @@ bool ensure_buffer(Connection& c, const Capture& cap) {
 	return true;
 }
 
+/// Output to capture: the wanted one (by name) or the first; outputs that went away are dropped.
+/// When the display is unplugged labwc replaces it by a headless output (NOOP-1), which is taken then.
+Output* pick_output(Connection& c, const std::string& wanted) {
+	for (auto it = c.outputs.begin(); it != c.outputs.end();) {
+		if (!(*it)->removed) { ++it; continue; }
+		if (c.current == it->get()) c.current = nullptr;
+		wl_output_destroy((*it)->output);
+		it = c.outputs.erase(it);
+	}
+	for (auto& o: c.outputs) if (wanted.empty() || o->name == wanted) return o.get();
+	return nullptr;
+}
+
 const char* NO_SCREENCOPY = "The compositor does not offer wlr-screencopy (works with labwc, wayfire, sway; not with GNOME or KDE)";
 
 }
@@ -224,16 +244,13 @@ position_{0, 0}, resolution_{0, 0}
 	if (!conn_) throw exception::InitializationFailed("No Wayland display to connect to");
 	if (!conn_->manager || !conn_->shm) throw exception::InitializationFailed(NO_SCREENCOPY);
 	if (conn_->outputs.empty()) throw exception::InitializationFailed("The compositor has no output to capture");
-	if (!output_.empty()) {
-		auto it = std::find_if(conn_->outputs.begin(), conn_->outputs.end(), [&](const auto& o) { return o->name == output_; });
-		if (it == conn_->outputs.end()) {
-			std::string names;
-			for (const auto& o: conn_->outputs) names += (names.empty() ? "" : ", ") + o->name;
-			throw exception::InitializationFailed("Output " + output_ + " not found (outputs: " + names + ")");
-		}
-		std::rotate(conn_->outputs.begin(), it, it + 1);
+	conn_->current = pick_output(*conn_, output_);
+	if (!conn_->current) {
+		std::string names;
+		for (const auto& o: conn_->outputs) names += (names.empty() ? "" : ", ") + o->name;
+		throw exception::InitializationFailed("Output " + output_ + " not found (outputs: " + names + ")");
 	}
-	const auto& o = *conn_->outputs.front();
+	const auto& o = *conn_->current;
 	log[log::info] << "Capturing output " << o.name << " (" << o.description << "), " << o.width << "x" << o.height;
 }
 
@@ -255,7 +272,11 @@ void WlScreen::run()
 			}
 			last_time += delta;
 		}
-		if (!step()) break;
+		if (!step()) {
+			// nothing more will come: end the route instead of sending nothing
+			request_end(core::yuri_exit_interrupted);
+			break;
+		}
 	}
 	close_pipes();
 	conn_.reset();
@@ -264,8 +285,25 @@ void WlScreen::run()
 bool WlScreen::step()
 {
 	Connection& c = *conn_;
+	if (!c.current || c.current->removed) {
+		// the output went away (display unplugged): take another one, or wait for the wanted one
+		wl_display_roundtrip(c.display);
+		wl_display_roundtrip(c.display);
+		Output* next = pick_output(c, output_);
+		if (!next) {
+			if (c.current || !waiting_) log[log::warning] << (output_.empty() ? std::string("No output to capture") : "Output " + output_ + " is gone")
+				<< ", waiting for one";
+			c.current = nullptr;
+			waiting_ = true;
+			sleep(500_ms);
+			return wl_display_get_error(c.display) == 0;
+		}
+		c.current = next;
+		waiting_ = false;
+		log[log::info] << "Capturing output " << next->name << " (" << next->description << "), " << next->width << "x" << next->height;
+	}
 	Capture cap;
-	auto frame = zwlr_screencopy_manager_v1_capture_output(c.manager, cursor_ ? 1 : 0, c.outputs.front()->output);
+	auto frame = zwlr_screencopy_manager_v1_capture_output(c.manager, cursor_ ? 1 : 0, c.current->output);
 	zwlr_screencopy_frame_v1_add_listener(frame, &frame_listener, &cap);
 	// version 3 announces all buffer types and ends with buffer_done; older ones send one buffer event
 	auto announced = [&] { return cap.failed || (c.manager_version >= 3 ? cap.buffer_done : cap.have_format); };
@@ -279,12 +317,16 @@ bool WlScreen::step()
 		log[log::error] << "Connection to the Wayland compositor lost";
 		return false;
 	}
-	if (!cap.have_format) {
-		log[log::error] << "The compositor offers no 8-bit RGB buffer to copy into";
-		return false;
-	}
 	if (!cap.ready) {
-		log[log::warning] << "Capturing the output failed";
+		// usually the output is just going away: its removal comes with the next events
+		wl_display_roundtrip(c.display);
+		if (c.current->removed) return true;
+		if (!cap.failed && !cap.have_format) {
+			log[log::error] << "The compositor offers no 8-bit RGB buffer to copy into";
+			return false;
+		}
+		log[log::warning] << "Capturing output " << c.current->name << " failed";
+		sleep(100_ms);
 		return true;
 	}
 

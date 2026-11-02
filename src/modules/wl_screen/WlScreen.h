@@ -42,6 +42,8 @@ private:
 	bool cursor_;
 	coordinates_t position_;
 	resolution_t resolution_;
+	/// The wanted output is gone and its return is awaited
+	bool waiting_ = false;
 };
 
 } /* namespace wl_screen */
