@@ -16,6 +16,7 @@
 #include "yuri/core/utils/global_time.h"
 
 #include <cassert>
+#include <cstring>
 
 using namespace std::chrono;
 
@@ -39,19 +40,56 @@ core::Parameters AVOutput::configure() {
 
 namespace {
 
-void add_stream(StreamDescription *output_stream, AVFormatContext *fmt_ctx, const AVCodec **codec, enum AVCodecID codec_id, AVPixelFormat pixel_format = AV_PIX_FMT_NONE) {
+/// How long video waits for the first audio before it is sent alone
+constexpr auto audio_wait = std::chrono::seconds(3);
+/// Pause after a failed start (no encoder, server not reachable)
+constexpr auto retry_delay = std::chrono::seconds(5);
+
+/// Hardware encoder of a Raspberry Pi (V4L2 M2M) if this machine has one that really opens:
+/// the Pi 4 and older have it, the Pi 5 has none and gets the software encoder.
+const AVCodec* hardware_encoder(AVCodecID codec_id) {
     #if defined(__arm__) || defined(__aarch64__)
-    // Should be Raspberry specific, not all arm, uses HW encoders for video
-    if (codec_id == AV_CODEC_ID_H264) {
-        *codec = avcodec_find_encoder_by_name("h264_v4l2m2m");
-    } else if (codec_id == AV_CODEC_ID_MPEG4) {
-        *codec = avcodec_find_encoder_by_name("mpeg4_v4l2m2m");
-    } else {
-        *codec = avcodec_find_encoder(codec_id);
-    }
+    const char* name = codec_id == AV_CODEC_ID_H264  ? "h264_v4l2m2m"
+                     : codec_id == AV_CODEC_ID_MPEG4 ? "mpeg4_v4l2m2m" : nullptr;
+    const AVCodec* codec = name ? avcodec_find_encoder_by_name(name) : nullptr;
+    if (!codec) return nullptr;
+    AVCodecContext* ctx = avcodec_alloc_context3(codec);
+    if (!ctx) return nullptr;
+    ctx->width = 640;
+    ctx->height = 480;
+    ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+    ctx->time_base = av_make_q(1, 30);
+    ctx->bit_rate = 1000000;
+    const int log_level = av_log_get_level();
+    av_log_set_level(AV_LOG_QUIET);
+    const bool works = avcodec_open2(ctx, codec, nullptr) >= 0;
+    av_log_set_level(log_level);
+    avcodec_free_context(&ctx);
+    return works ? codec : nullptr;
     #else
-    *codec = avcodec_find_encoder(codec_id);
+    (void)codec_id;
+    return nullptr;
     #endif
+}
+
+bool supports_pixel_format(const AVCodec* codec, AVPixelFormat pixel_format) {
+    const AVPixelFormat* formats = nullptr;
+    #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 13, 100)
+    if (avcodec_get_supported_config(nullptr, codec, AV_CODEC_CONFIG_PIX_FORMAT, 0, reinterpret_cast<const void**>(&formats), nullptr) < 0)
+        return true;
+    #else
+    formats = codec->pix_fmts;
+    #endif
+    if (!formats) return true;
+    for (; *formats != AV_PIX_FMT_NONE; ++formats)
+        if (*formats == pixel_format) return true;
+    return false;
+}
+
+void add_stream(StreamDescription *output_stream, AVFormatContext *fmt_ctx, const AVCodec **codec, enum AVCodecID codec_id, AVPixelFormat pixel_format = AV_PIX_FMT_NONE) {
+    *codec = hardware_encoder(codec_id);
+    if (!*codec)
+        *codec = avcodec_find_encoder(codec_id);
     if (!(*codec))
         throw(std::runtime_error("Could not find encoder for codec."));
     output_stream->tmp_pkt = av_packet_alloc();
@@ -99,7 +137,13 @@ void add_stream(StreamDescription *output_stream, AVFormatContext *fmt_ctx, cons
         codec_ctx->width    = output_stream->width;
         codec_ctx->height   = output_stream->height;
         codec_ctx->gop_size = 12;
-        codec_ctx->pix_fmt  = pixel_format;
+        // Software encoders (libx264) take planar formats only; 4:2:0 is what streaming services expect
+        codec_ctx->pix_fmt  = supports_pixel_format(*codec, pixel_format) ? pixel_format : AV_PIX_FMT_YUV420P;
+        if (!strcmp((*codec)->name, "libx264")) {
+            // Live: fast enough for a Raspberry Pi 5, no frames held back
+            av_opt_set(codec_ctx->priv_data, "preset", "veryfast", 0);
+            av_opt_set(codec_ctx->priv_data, "tune", "zerolatency", 0);
+        }
         if (codec_ctx->codec_id == AV_CODEC_ID_MPEG2VIDEO) {
             codec_ctx->max_b_frames = 2;
         }
@@ -194,26 +238,21 @@ bool write_video_frame(AVFormatContext *fmt_ctx, StreamDescription *output_strea
 }
 
 bool write_audio_frame(AVFormatContext *fmt_ctx, StreamDescription *output_stream) {
-    AVCodecContext *codec_ctx;
-    int dst_nb_samples;
-    codec_ctx = output_stream->enc;
-    if (output_stream->tmp_frame) {
-        dst_nb_samples = av_rescale_rnd(swr_get_delay(output_stream->swr_ctx, codec_ctx->sample_rate)
-                         + output_stream->tmp_frame->nb_samples, codec_ctx->sample_rate, codec_ctx->sample_rate, AV_ROUND_UP);
-        auto ret = av_frame_make_writable(output_stream->frame);
-        if (ret < 0)
-            throw(std::runtime_error("Could not make frame writable."));
+    AVCodecContext *codec_ctx = output_stream->enc;
+    // tmp_frame holds the source samples, frame gets them converted for the encoder
+    AVFrame *frame = output_stream->frame;
+    auto ret = av_frame_make_writable(frame);
+    if (ret < 0)
+        throw(std::runtime_error("Could not make frame writable."));
 
-        ret = swr_convert(output_stream->swr_ctx,
-                          output_stream->frame->data, dst_nb_samples,
-                          (const uint8_t **)output_stream->tmp_frame->data, output_stream->tmp_frame->nb_samples);
-        if (ret < 0)
-            throw(std::runtime_error("Error while converting audio frame."));
-        output_stream->tmp_frame = output_stream->frame;
-        output_stream->tmp_frame->pts = av_rescale_q(output_stream->next_pts, av_make_q(1, codec_ctx->sample_rate), codec_ctx->time_base);
-        output_stream->next_pts += dst_nb_samples;
-    }
-    return write_frame(fmt_ctx, codec_ctx, output_stream->stream, output_stream->tmp_frame, output_stream->tmp_pkt);
+    ret = swr_convert(output_stream->swr_ctx,
+                      frame->data, frame->nb_samples,
+                      (const uint8_t **)output_stream->tmp_frame->data, output_stream->tmp_frame->nb_samples);
+    if (ret < 0)
+        throw(std::runtime_error("Error while converting audio frame."));
+    frame->pts = av_rescale_q(output_stream->next_pts, av_make_q(1, codec_ctx->sample_rate), codec_ctx->time_base);
+    output_stream->next_pts += ret;
+    return write_frame(fmt_ctx, codec_ctx, output_stream->stream, frame, output_stream->tmp_pkt);
 }
 
 void open_video(const AVCodec *codec, StreamDescription *output_stream, AVDictionary *opt_arg) {
@@ -325,6 +364,22 @@ AVOutput::~AVOutput() noexcept {
 }
 
 void AVOutput::initialize() {
+    try {
+        open_output();
+    } catch (...) {
+        // a half opened output (encoder missing, server not reachable) is released before the next attempt
+        close_stream(&video_st_);
+        close_stream(&audio_st_);
+        if (fmt_ctx_) {
+            if (fmt_ctx_->pb) avio_closep(&fmt_ctx_->pb);
+            avformat_free_context(fmt_ctx_);
+            fmt_ctx_ = nullptr;
+        }
+        throw;
+    }
+}
+
+void AVOutput::open_output() {
 	video_st_ = {};
 	audio_st_ = {};
     const AVCodec *audio_codec, *video_codec;
@@ -350,6 +405,7 @@ void AVOutput::initialize() {
         av_channel_layout_uninit(&audio_st_.channel_layout);
         av_channel_layout_default(&audio_st_.channel_layout, audio_st_.channels);
         audio_st_.audio_format = libav::avsampleformat_from_yuri(yuri_audio_frame_->get_format());
+        audio_sample_bytes_ = yuri_audio_frame_->get_sample_size() / 8;
         #if defined(__arm__) || defined(__aarch64__)
         // Should be Raspberry specific, not all arm, AAC codec seems to be broken in current Raspbian
         add_stream(&audio_st_, fmt_ctx_, &audio_codec, AV_CODEC_ID_MP3);
@@ -375,7 +431,9 @@ void AVOutput::deinitialize() {
             avio_closep(&fmt_ctx_->pb);
         if (fmt_ctx_)
             avformat_free_context(fmt_ctx_);
+        fmt_ctx_ = nullptr;
     }
+    audio_fifo_.clear();
     av_initialized_ = false;
 }
 
@@ -397,20 +455,33 @@ bool AVOutput::step() {
     yuri_video_frame ? yuri_video_frame_ = yuri_video_frame : yuri_video_frame = yuri_video_frame_;
     yuri_audio_frame ? yuri_audio_frame_ = yuri_audio_frame : yuri_audio_frame = yuri_audio_frame_;
 
-	if (!av_initialized_) {
-        try {
-            if (audio_ && yuri_audio_frame_ && yuri_video_frame_) {
+	if (!av_initialized_ && yuri_video_frame_ && std::chrono::steady_clock::now() >= next_attempt_) {
+        // With audio enabled the output waits for both; a source without sound (a camera,
+        // an NDI stream without audio) is sent as video only after a while
+        if (!video_waiting_) {
+            video_waiting_ = true;
+            video_waiting_since_ = std::chrono::steady_clock::now();
+        }
+        const bool audio_missing = audio_ && !yuri_audio_frame_
+                && std::chrono::steady_clock::now() - video_waiting_since_ > audio_wait;
+        if (!audio_ || yuri_audio_frame_ || audio_missing) {
+            if (audio_missing)
+                log[log::warning] << "No audio arrives, sending video only";
+            try {
                 initialize();
-            } else if (!audio_ && yuri_video_frame_) {
-                initialize();
+                video_waiting_ = false;
+                log[log::info] << "Output started (video encoder " << video_st_.enc->codec->name
+                               << (audio_st_.enc ? std::string(", audio encoder ") + audio_st_.enc->codec->name : std::string()) << ")";
+            } catch(const std::exception& e) {
+                log[log::error] << "Initialization error: " << e.what() << ", trying again in "
+                                << std::chrono::duration_cast<std::chrono::seconds>(retry_delay).count() << " s";
+                next_attempt_ = std::chrono::steady_clock::now() + retry_delay;
             }
-        } catch(const std::exception& e) {
-            log[log::error] << "Initialization error: " << e.what();
         }
 	}
 
 	if (av_initialized_ && yuri_video_frame &&
-        (!audio_ || av_compare_ts(video_st_.next_pts, video_st_.enc->time_base, audio_st_.next_pts, audio_st_.enc->time_base) <= 0)) {
+        (!audio_st_.enc || av_compare_ts(video_st_.next_pts, video_st_.enc->time_base, audio_st_.next_pts, audio_st_.enc->time_base) <= 0)) {
         AVFrame *av_pic = video_st_.tmp_frame;
 		auto no_planes = yuri_video_frame->get_planes_count();
 		auto line_size = PLANE_DATA(yuri_video_frame,0).get_line_size();
@@ -441,22 +512,32 @@ bool AVOutput::step() {
             deinitialize();
         }
     }
-    if (av_initialized_ && yuri_audio_frame &&
-        av_compare_ts(audio_st_.next_pts, audio_st_.enc->time_base, video_st_.next_pts, video_st_.enc->time_base) <= 0) {
-        AVFrame *frame = audio_st_.tmp_frame;
-        uint8_t* dst_data = reinterpret_cast<uint8_t*>(frame->data[0]);
-        uint8_t* src_data = reinterpret_cast<uint8_t*>(yuri_audio_frame->data());
-        auto max_samples = std::min(frame->nb_samples, static_cast<int>(yuri_audio_frame->get_sample_count()));
-        if (frame->nb_samples != static_cast<int>(yuri_audio_frame->get_sample_count()))
-            log[log::warning] << "Codec samples are not the same as source samples (" << frame->nb_samples << " != " << yuri_audio_frame->get_sample_count() << ")!";
-        std::copy(src_data,src_data+max_samples*(yuri_audio_frame->get_sample_size()/8),dst_data);
-        try {
-            if (!write_audio_frame(fmt_ctx_, &audio_st_))
-                log[log::warning] << "Temporary error in sending audio frame.";
+    if (av_initialized_ && audio_st_.enc) {
+        // Sources deliver other block sizes than the encoder takes (1024 vs. 1152 samples
+        // of MP3): samples are queued and taken out in encoder frames
+        const size_t sample_bytes = audio_sample_bytes_;
+        if (yuri_audio_frame) {
+            const auto* data = reinterpret_cast<const uint8_t*>(yuri_audio_frame->data());
+            audio_fifo_.insert(audio_fifo_.end(), data, data + yuri_audio_frame->get_sample_count() * sample_bytes);
             yuri_audio_frame_ = nullptr;
-        } catch(const std::exception& e) {
-            log[log::error] << "Not able to send audio frame: " << e.what();
-            deinitialize();
+            // video stalled: keep at most 2 s of sound
+            const size_t limit = static_cast<size_t>(audio_st_.sample_rate) * 2 * sample_bytes;
+            if (audio_fifo_.size() > limit)
+                audio_fifo_.erase(audio_fifo_.begin(), audio_fifo_.end() - limit);
+        }
+        AVFrame *frame = audio_st_.tmp_frame;
+        const size_t frame_bytes = static_cast<size_t>(frame->nb_samples) * sample_bytes;
+        while (av_initialized_ && audio_fifo_.size() >= frame_bytes &&
+               av_compare_ts(audio_st_.next_pts, audio_st_.enc->time_base, video_st_.next_pts, video_st_.enc->time_base) <= 0) {
+            std::copy(audio_fifo_.begin(), audio_fifo_.begin() + frame_bytes, frame->data[0]);
+            audio_fifo_.erase(audio_fifo_.begin(), audio_fifo_.begin() + frame_bytes);
+            try {
+                if (!write_audio_frame(fmt_ctx_, &audio_st_))
+                    log[log::warning] << "Temporary error in sending audio frame.";
+            } catch(const std::exception& e) {
+                log[log::error] << "Not able to send audio frame: " << e.what();
+                deinitialize();
+            }
         }
     }
 

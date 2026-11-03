@@ -12,6 +12,8 @@
 #include "yuri/core/frame/RawVideoFrame.h"
 #include "yuri/core/frame/RawAudioFrame.h"
 #include "yuri/core/utils/managed_resource.h"
+#include <chrono>
+#include <vector>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -60,6 +62,7 @@ public:
 private:
     virtual bool step() override;
 	void initialize();
+	void open_output();
 	void deinitialize();
 
     bool                av_initialized_;
@@ -72,12 +75,20 @@ private:
     pix_fmt_t           video_format_;
     bool                audio_;
 
-    AVFormatContext*    fmt_ctx_;
+    AVFormatContext*    fmt_ctx_ = nullptr;
     StreamDescription   video_st_;
     StreamDescription   audio_st_;
 
     std::shared_ptr<yuri::core::RawAudioFrame>  yuri_audio_frame_;
     std::shared_ptr<yuri::core::RawVideoFrame>  yuri_video_frame_;
+
+    /// Interleaved samples waiting for a full encoder frame
+    std::vector<uint8_t> audio_fifo_;
+    size_t audio_sample_bytes_ = 0;
+    /// First video frame of a start that still waits for audio
+    bool video_waiting_ = false;
+    std::chrono::steady_clock::time_point video_waiting_since_{};
+    std::chrono::steady_clock::time_point next_attempt_{};
 
     size_t   last_video_width;
     size_t   last_video_height;
