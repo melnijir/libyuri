@@ -385,8 +385,11 @@ void AVOutput::open_output() {
     const AVCodec *audio_codec, *video_codec;
     AVDictionary *opt = nullptr;
 
-    memset(&fmt_ctx_, 0, sizeof(fmt_ctx_));
-	auto ret = avformat_alloc_output_context2(&fmt_ctx_, nullptr, "flv", nullptr);
+    // RTMP carries FLV; a file gets the container of its extension (.mp4, .mkv, ...), FLV when unknown
+    const bool rtmp = url_.rfind("rtmp://", 0) == 0 || url_.rfind("rtmps://", 0) == 0;
+    auto ret = rtmp ? -1 : avformat_alloc_output_context2(&fmt_ctx_, nullptr, nullptr, url_.c_str());
+    if (ret < 0)
+        ret = avformat_alloc_output_context2(&fmt_ctx_, nullptr, "flv", nullptr);
 	if (ret < 0)
         throw(std::runtime_error("Could not allocate output format context."));
 
@@ -470,7 +473,7 @@ bool AVOutput::step() {
             try {
                 initialize();
                 video_waiting_ = false;
-                log[log::info] << "Output started (video encoder " << video_st_.enc->codec->name
+                log[log::info] << "Output started (" << fmt_ctx_->oformat->name << ", video encoder " << video_st_.enc->codec->name
                                << (audio_st_.enc ? std::string(", audio encoder ") + audio_st_.enc->codec->name : std::string()) << ")";
             } catch(const std::exception& e) {
                 log[log::error] << "Initialization error: " << e.what() << ", trying again in "
