@@ -552,7 +552,7 @@ std::istream& operator>>(std::istream& is, color_t& col_out)
         if (c >= '0' && c <= '9') {
             data.push_back(static_cast<uint8_t>(c - '0'));
         } else if (cl >= 'a' && cl <= 'f') {
-            data.push_back(static_cast<uint8_t>(c - 'a') + 10);
+            data.push_back(static_cast<uint8_t>(cl - 'a') + 10);
         } else {
             //			std::cerr << __LINE__ << ": BAD CHARACTER" << std::endl;
             break;
