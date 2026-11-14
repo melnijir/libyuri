@@ -33,6 +33,10 @@ public:
 	void sound_receiver();
 private:
 	const NDIlib_source_t* get_source(std::string name, int *position);
+	/// Waits for the main stream or the backup one (the main one wins); sets *backup when the backup was found
+	const NDIlib_source_t* find_stream(int *position, bool *backup);
+	/// The main stream is listed by the finder (checked while playing the backup)
+	bool main_stream_listed();
 
 	virtual bool set_param(const core::Parameter &param) override;
 	virtual bool do_process_event(const std::string& event_name, const event::pBasicEvent& event);

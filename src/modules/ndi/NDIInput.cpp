@@ -137,6 +137,38 @@ const NDIlib_source_t* NDIInput::get_source(std::string name, int *position) {
 	return sources;
 }
 
+const NDIlib_source_t* NDIInput::find_stream(int *position, bool *backup) {
+	*backup = false;
+	const NDIlib_source_t* sources = nullptr;
+	for (int tries = 0; tries < 10 && still_running(); ++tries) {
+		NDIlib_->find_wait_for_sources(ndi_finder_, 1000);
+		uint32_t count = 0;
+		sources = NDIlib_->find_get_current_sources(ndi_finder_, &count);
+		int backup_id = -1;
+		for (uint32_t i = 0; i < count; i++) {
+			if (stream_ == sources[i].p_ndi_name) {
+				*position = i;
+				return sources;
+			}
+			if (!backup_.empty() && backup_ == sources[i].p_ndi_name) backup_id = i;
+		}
+		if (backup_id >= 0) {
+			*position = backup_id;
+			*backup = true;
+			return sources;
+		}
+	}
+	return sources;
+}
+
+bool NDIInput::main_stream_listed() {
+	uint32_t count = 0;
+	const NDIlib_source_t* sources = NDIlib_->find_get_current_sources(ndi_finder_, &count);
+	for (uint32_t i = 0; i < count; i++)
+		if (stream_ == sources[i].p_ndi_name) return true;
+	return false;
+}
+
 void NDIInput::sound_receiver() {
 	// Yuri Audio
 	core::pRawAudioFrame y_audio_frame;
@@ -190,17 +222,17 @@ void NDIInput::run() {
 		emit_event("stream_off");
 		// Search for the source on the network
 		int stream_id = -1;
+		bool on_backup = false;
 		const NDIlib_source_t* sources = nullptr;
 		while (still_running() && stream_id == -1) {
-			sources = get_source(stream_, &stream_id);
-			if (stream_id == -1 && backup_.length() > 0)
-				sources = get_source(backup_, &stream_id);
+			sources = find_stream(&stream_id, &on_backup);
 		}
 
 		if (stream_id == -1)
 			continue;
 		
-		log[log::info] << "Found stream \"" << sources[stream_id].p_ndi_name << "\" with id " << stream_id;
+		log[log::info] << (on_backup ? "Main stream not found, using the backup stream \"" : "Found stream \"")
+			<< sources[stream_id].p_ndi_name << "\" with id " << stream_id;
 
 		NDIlib_recv_create_v3_t receiver_desc;
 		receiver_desc.source_to_connect_to = sources[stream_id];
@@ -244,7 +276,16 @@ void NDIInput::run() {
 		audio_running_ = true;
 		std::thread th(&NDIInput::sound_receiver, this);
 		// Start video receiver
+		Timer main_check;
 		while (still_running() && stream_fail_++ < 20) {
+			// playing the backup: go back to the main stream as soon as it is there again
+			if (on_backup && main_check.get_duration() > 2_s) {
+				main_check.reset();
+				if (main_stream_listed()) {
+					log[log::info] << "Main stream \"" << stream_ << "\" is back, switching to it";
+					break;
+				}
+			}
 			NDIlib_video_frame_v2_t n_video_frame;
 			NDIlib_metadata_frame_t metadata_frame;
 			NDIlib_recv_queue_t recv_queue;
