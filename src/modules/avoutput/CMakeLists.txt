@@ -7,14 +7,8 @@ SET (SRC AVOutput.cpp
 		 register.cpp )
 
 
-SET(CMAKE_REQUIRED_LIBRARIES ${libavutil_LIBRARIES})
-SET(CMAKE_REQUIRED_FLAGS "${CMAKE_C_FLAGS}")
-check_library_exists(avcodec av_frame_get_channels ${libavcodec_LIBDIR} HAVE_FRAME_GET_CHANNELS)
-SET(CMAKE_REQUIRED_LIBRARIES )
-SET(CMAKE_REQUIRED_FLAGS "")
-if (NOT HAVE_FRAME_GET_CHANNELS)
-    add_definitions(-DBROKEN_FFMPEG)
-endif()
+# The code needs the channel layout API of FFmpeg 5.1+ (av_frame_get_channels, checked here
+# before, is gone in FFmpeg 8 and disabled audio of file playback)
 
 include_directories(${libavcodec_INCLUDE_DIRS})
 link_directories(${libavcodec_LIBRARY_DIRS})
