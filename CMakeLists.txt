@@ -224,7 +224,8 @@ SET(CPACK_DEBIAN_PACKAGE_MAINTAINER "<zdenek@stdio.cz>>")
 # are only needed for building against yuri (e.g. yuri-modules), so they are recommended.
 SET(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 SET(CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS "${CMAKE_BINARY_DIR}/src/yuri" "${CMAKE_BINARY_DIR}/src/yuri/libav" "${CMAKE_BINARY_DIR}/src/yuri/gl" "${CMAKE_BINARY_DIR}/src/yuri/cuda")
-SET(CPACK_DEBIAN_PACKAGE_RECOMMENDS "libboost-all-dev, libgl-dev | libgl1-mesa-dev, libavcodec-dev, libavformat-dev, libavutil-dev, libjsoncpp-dev")
+# headers for building against yuri: suggested only, apt would install the whole toolchain with a runtime package
+SET(CPACK_DEBIAN_PACKAGE_SUGGESTS "libboost-all-dev, libgl-dev | libgl1-mesa-dev, libavcodec-dev, libavformat-dev, libavutil-dev, libjsoncpp-dev")
 SET(CPACK_PACKAGE_CHECKSUM SHA256)
 
 # Simple hack to get detailed version
