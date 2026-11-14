@@ -16,7 +16,9 @@
 #include "yuri/core/utils/global_time.h"
 
 #include <cassert>
+#include <cmath>
 #include <cstring>
+#include <strings.h>
 
 using namespace std::chrono;
 
@@ -40,14 +42,17 @@ core::Parameters AVOutput::configure() {
 
 namespace {
 
+bool iequals(const std::string& a, const char* b) { return strcasecmp(a.c_str(), b) == 0; }
+
 /// How long video waits for the first audio before it is sent alone
 constexpr auto audio_wait = std::chrono::seconds(3);
 /// Pause after a failed start (no encoder, server not reachable)
 constexpr auto retry_delay = std::chrono::seconds(5);
 
-/// Hardware encoder of a Raspberry Pi (V4L2 M2M) if this machine has one that really opens:
-/// the Pi 4 and older have it, the Pi 5 has none and gets the software encoder.
-const AVCodec* hardware_encoder(AVCodecID codec_id) {
+/// Hardware encoder of a Raspberry Pi (V4L2 M2M) if this machine has one that really opens
+/// with this picture size: the Pi 4 and older have it (up to 1920 wide), the Pi 5 has none
+/// and gets the software encoder.
+const AVCodec* hardware_encoder(AVCodecID codec_id, int width, int height) {
     #if defined(__arm__) || defined(__aarch64__)
     const char* name = codec_id == AV_CODEC_ID_H264  ? "h264_v4l2m2m"
                      : codec_id == AV_CODEC_ID_MPEG4 ? "mpeg4_v4l2m2m" : nullptr;
@@ -55,8 +60,8 @@ const AVCodec* hardware_encoder(AVCodecID codec_id) {
     if (!codec) return nullptr;
     AVCodecContext* ctx = avcodec_alloc_context3(codec);
     if (!ctx) return nullptr;
-    ctx->width = 640;
-    ctx->height = 480;
+    ctx->width = width > 0 ? width : 640;
+    ctx->height = height > 0 ? height : 480;
     ctx->pix_fmt = AV_PIX_FMT_YUV420P;
     ctx->time_base = av_make_q(1, 30);
     ctx->bit_rate = 1000000;
@@ -67,7 +72,7 @@ const AVCodec* hardware_encoder(AVCodecID codec_id) {
     avcodec_free_context(&ctx);
     return works ? codec : nullptr;
     #else
-    (void)codec_id;
+    (void)codec_id; (void)width; (void)height;
     return nullptr;
     #endif
 }
@@ -87,7 +92,7 @@ bool supports_pixel_format(const AVCodec* codec, AVPixelFormat pixel_format) {
 }
 
 void add_stream(StreamDescription *output_stream, AVFormatContext *fmt_ctx, const AVCodec **codec, enum AVCodecID codec_id, AVPixelFormat pixel_format = AV_PIX_FMT_NONE) {
-    *codec = hardware_encoder(codec_id);
+    *codec = pixel_format != AV_PIX_FMT_NONE ? hardware_encoder(codec_id, output_stream->width, output_stream->height) : nullptr;
     if (!*codec)
         *codec = avcodec_find_encoder(codec_id);
     if (!(*codec))
@@ -411,10 +416,13 @@ void AVOutput::open_output() {
         audio_sample_bytes_ = yuri_audio_frame_->get_sample_size() / 8;
         #if defined(__arm__) || defined(__aarch64__)
         // Should be Raspberry specific, not all arm, AAC codec seems to be broken in current Raspbian
-        add_stream(&audio_st_, fmt_ctx_, &audio_codec, AV_CODEC_ID_MP3);
+        AVCodecID audio_id = AV_CODEC_ID_MP3;
         #else
-        add_stream(&audio_st_, fmt_ctx_, &audio_codec, AV_CODEC_ID_AAC);
+        AVCodecID audio_id = AV_CODEC_ID_AAC;
         #endif
+        if (iequals(audio_codec_, "aac")) audio_id = AV_CODEC_ID_AAC;
+        else if (iequals(audio_codec_, "mp3")) audio_id = AV_CODEC_ID_MP3;
+        add_stream(&audio_st_, fmt_ctx_, &audio_codec, audio_id);
     }
 
 	if (yuri_video_frame_) open_video(video_codec, &video_st_, opt);
@@ -422,6 +430,7 @@ void AVOutput::open_output() {
 
     start_stream(fmt_ctx_, opt, url_);
 
+    started_ = std::chrono::steady_clock::now();
     av_initialized_ = true;
 }
 
@@ -483,8 +492,20 @@ bool AVOutput::step() {
         }
 	}
 
-	if (av_initialized_ && yuri_video_frame &&
-        (!audio_st_.enc || av_compare_ts(video_st_.next_pts, video_st_.enc->time_base, audio_st_.next_pts, audio_st_.enc->time_base) <= 0)) {
+    // Video timestamps follow the clock, not the frame count: a camera giving 10 fps or a 50 fps
+    // stream keeps its real speed (and stays with the sound). Frames coming faster than fps are left out.
+    bool video_due = false;
+    if (av_initialized_ && yuri_video_frame) {
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count();
+        const int64_t pts = std::llround(elapsed * video_st_.fps);
+        if (pts >= video_st_.next_pts) {
+            video_st_.next_pts = pts;
+            video_due = true;
+        } else {
+            yuri_video_frame_ = nullptr;
+        }
+    }
+	if (video_due) {
         AVFrame *av_pic = video_st_.tmp_frame;
 		auto no_planes = yuri_video_frame->get_planes_count();
 		auto line_size = PLANE_DATA(yuri_video_frame,0).get_line_size();
@@ -528,6 +549,11 @@ bool AVOutput::step() {
             if (audio_fifo_.size() > limit)
                 audio_fifo_.erase(audio_fifo_.begin(), audio_fifo_.end() - limit);
         }
+        if (audio_st_.next_pts == 0 && !audio_fifo_.empty()) {
+            // sound starting later than the picture is placed where it belongs in time
+            const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count();
+            audio_st_.next_pts = std::llround(elapsed * audio_st_.enc->sample_rate);
+        }
         AVFrame *frame = audio_st_.tmp_frame;
         const size_t frame_bytes = static_cast<size_t>(frame->nb_samples) * sample_bytes;
         while (av_initialized_ && audio_fifo_.size() >= frame_bytes &&
@@ -556,6 +582,7 @@ bool AVOutput::set_param(const core::Parameter &parameter) {
         (video_codec_,   "video_codec",  [](const core::Parameter&p){ return core::compressed_frame::parse_format(p.get<std::string>()); })
         (video_format_,  "video_format", [](const core::Parameter&p){ return core::raw_format::parse_format(p.get<std::string>()); })
         (audio_,         "audio")
+        (audio_codec_,   "audio_codec")
         )
         return true;
     return IOThread::set_param(parameter);

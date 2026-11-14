@@ -74,6 +74,10 @@ private:
     format_t            video_codec_;
     pix_fmt_t           video_format_;
     bool                audio_;
+    /// "aac" or "mp3"; empty = the default of the platform
+    std::string         audio_codec_;
+    /// When the output started: video timestamps are taken from the clock
+    std::chrono::steady_clock::time_point started_{};
 
     AVFormatContext*    fmt_ctx_ = nullptr;
     StreamDescription   video_st_;
