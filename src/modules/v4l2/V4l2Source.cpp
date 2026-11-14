@@ -9,6 +9,7 @@
  */
 
 #include "V4l2Source.h"
+#include <algorithm>
 //#include <boost/algorithm/string.hpp>
 #include "yuri/core/Module.h"
 #include <string>
@@ -81,6 +82,10 @@ std::vector<core::InputDeviceInfo> V4l2Source::enumerate()
 			core::InputDeviceInfo device;
 			device.main_param_order = main_param_order;
 			auto info = f.get_info();
+			// Raspberry Pi image processors and codecs present themselves as capture devices,
+			// but they are no cameras
+			static const std::vector<std::string> not_cameras = {"bcm2835-isp", "bcm2835-codec", "pispbe", "rpi-hevc-dec"};
+			if (std::find(not_cameras.begin(), not_cameras.end(), info.driver) != not_cameras.end()) continue;
 			device.device_name = info.name;
 
 			auto inputs = f.enum_inputs();
