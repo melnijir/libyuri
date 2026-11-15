@@ -62,7 +62,7 @@ void SineGenerator::run()
 		auto d_end = d + samples_ * channels_;
 
 		while(d < d_end) {
-			auto v = static_cast<int16_t>(max_value * std::sin(pi * sample_ * frequency_ / sampling_));
+			auto v = static_cast<int16_t>(max_value * std::sin(2.0 * pi * sample_ * frequency_ / sampling_));
 			for (auto i: irange(0, channels_)) {
 				(void)i;
 				*d++=v;
