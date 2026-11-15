@@ -13,7 +13,9 @@
 #include "WebStaticResource.h"
 #include "WebImageResource.h"
 #include "WebControlResource.h"
+#ifdef YURI_WEBSERVER_DATA
 #include "WebDataResource.h"
+#endif
 #include "yuri/core/Module.h"
 
 namespace yuri {
@@ -27,7 +29,9 @@ MODULE_REGISTRATION_BEGIN("webserver")
 		REGISTER_IOTHREAD("web_image",WebImageResource)
 		REGISTER_IOTHREAD("web_control",WebControlResource)
 		REGISTER_IOTHREAD("web_directory",WebDirectoryResource)
+#ifdef YURI_WEBSERVER_DATA
 		REGISTER_IOTHREAD("web_data",WebDataResource)
+#endif
 
 MODULE_REGISTRATION_END()
 

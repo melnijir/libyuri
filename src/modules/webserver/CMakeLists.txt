@@ -30,6 +30,10 @@ ENDIF()
 
  
 add_library(${MODULE} MODULE ${SRC})
+IF (JSONCPP_LIBRARY)
+	# the data resource is registered only when it is built
+	target_compile_definitions(${MODULE} PRIVATE YURI_WEBSERVER_DATA)
+ENDIF()
 target_link_libraries(${MODULE} ${LIBNAME} ${Boost_REGEX_LIBRARY} ${JSONCPP_LIBRARY})
 
 YURI_INSTALL_MODULE(${MODULE})

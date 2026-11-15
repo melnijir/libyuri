@@ -493,7 +493,8 @@ bool NDIInput::set_param(const core::Parameter &param) {
 			(ndi_path_, "ndi_path")
 			(audio_enabled_, "audio")
 			(lowres_enabled_, "lowres")
-			(reference_level_, "reference_level"))
+			(reference_level_, "reference_level")
+			(event_time_, "event_time", [](const core::Parameter& p){ return duration_t{static_cast<detail::duration_rep>(p.get<double>() * 1e6)}; }))
 		return true;
 	return IOThread::set_param(param);
 }

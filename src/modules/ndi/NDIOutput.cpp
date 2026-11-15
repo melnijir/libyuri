@@ -41,7 +41,7 @@ core::Parameters NDIOutput::configure() {
     core::Parameters p = IOThread::configure();
     p["stream"]["Name of the stream to send."]="Dicaffeine";
     p["audio"]["Set to true if audio should be send."]=false;
-    p["fps"]["Sets fps indicator sent in the stream"]="";
+    p["fps"]["Sets fps indicator sent in the stream (0 = default)"]=0.0;
     p["ptz"]["Support for PTZ control"]=false;
     p["ndi_path"]["Path where to find the NDI libraries, if empty, env variable NDI_PATH is used."]="";
     return p;
