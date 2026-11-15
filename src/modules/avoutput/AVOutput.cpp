@@ -566,10 +566,19 @@ bool AVOutput::step() {
             if (audio_fifo_.size() > limit)
                 audio_fifo_.erase(audio_fifo_.begin(), audio_fifo_.end() - limit);
         }
-        if (audio_st_.next_pts == 0 && !audio_fifo_.empty()) {
-            // sound starting later than the picture is placed where it belongs in time
+        if (yuri_audio_frame && audio_st_.sample_rate > 0) {
+            // The picture is timed by the clock, the sound by its samples. Sound that starts later
+            // or comes back after a pause (the source dropped out, a backup stream took over) is
+            // placed where it belongs in time, otherwise it would run ahead of the picture.
             const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count();
-            audio_st_.next_pts = std::llround(elapsed * audio_st_.enc->sample_rate);
+            const int64_t rate = audio_st_.enc->sample_rate;
+            const int64_t queued = static_cast<int64_t>(audio_fifo_.size() / sample_bytes) * rate / audio_st_.sample_rate;
+            const int64_t at_clock = std::llround(elapsed * rate) - queued;
+            if (at_clock > 0 && (audio_st_.next_pts == 0 || at_clock - audio_st_.next_pts > rate / 2)) {
+                if (audio_st_.next_pts != 0)
+                    log[log::info] << "Sound paused for " << (at_clock - audio_st_.next_pts) * 1000 / rate << " ms, keeping it with the picture";
+                audio_st_.next_pts = at_clock;
+            }
         }
         AVFrame *frame = audio_st_.tmp_frame;
         const size_t frame_bytes = static_cast<size_t>(frame->nb_samples) * sample_bytes;
