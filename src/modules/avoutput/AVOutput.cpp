@@ -225,7 +225,8 @@ bool write_video_frame(AVFormatContext *fmt_ctx, StreamDescription *output_strea
     AVCodecContext *codec_ctx = output_stream->enc;
 
     if (!output_stream->sws_ctx) {
-        output_stream->sws_ctx = sws_getContext(output_stream->enc->width, output_stream->enc->height,
+        // the source may differ from the encoder in size (a backup stream with another resolution)
+        output_stream->sws_ctx = sws_getContext(output_stream->tmp_frame->width, output_stream->tmp_frame->height,
                                         output_stream->video_format,
                                         output_stream->enc->width, output_stream->enc->height,
                                         output_stream->enc->pix_fmt,
@@ -457,11 +458,27 @@ bool AVOutput::step() {
         (  last_video_format != yuri_video_frame->get_format()
         || last_video_width  != yuri_video_frame->get_width()
         || last_video_height != yuri_video_frame->get_height())) {
-        // Different frame arrived, new initialization
-        log[log::warning] << "Different frame arrived, we have to repeat the initialization.";
-        yuri_video_frame_ = nullptr;
-        yuri_audio_frame_ = nullptr;
-        deinitialize();
+        // Another size or format (e.g. a backup stream took over): the output goes on, the
+        // pictures are scaled to the size it started with. Restarting it would overwrite a
+        // recording and drop an RTMP connection.
+        const auto av_format = libav::avpixelformat_from_yuri(yuri_video_frame->get_format());
+        if (av_format != AV_PIX_FMT_NONE) {
+            log[log::info] << "Picture changed to " << yuri_video_frame->get_width() << "x" << yuri_video_frame->get_height()
+                           << ", scaling it to " << video_st_.enc->width << "x" << video_st_.enc->height;
+            video_st_.video_format = av_format;
+            video_st_.tmp_frame->width = static_cast<int>(yuri_video_frame->get_width());
+            video_st_.tmp_frame->height = static_cast<int>(yuri_video_frame->get_height());
+            video_st_.tmp_frame->format = av_format;
+            if (video_st_.sws_ctx) { sws_freeContext(video_st_.sws_ctx); video_st_.sws_ctx = nullptr; }
+            last_video_format = yuri_video_frame->get_format();
+            last_video_width  = yuri_video_frame->get_width();
+            last_video_height = yuri_video_frame->get_height();
+        } else {
+            log[log::warning] << "Different frame arrived, we have to repeat the initialization.";
+            yuri_video_frame_ = nullptr;
+            yuri_audio_frame_ = nullptr;
+            deinitialize();
+        }
     }
 
     yuri_video_frame ? yuri_video_frame_ = yuri_video_frame : yuri_video_frame = yuri_video_frame_;
