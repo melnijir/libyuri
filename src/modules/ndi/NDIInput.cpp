@@ -191,6 +191,10 @@ void NDIInput::sound_receiver() {
 			delete[] n_audio_frame_16bpp_interleaved.p_data;
 			NDIlib_->recv_free_audio_v2(ndi_receiver_, &n_audio_frame);
 			break;
+		// Nothing arrived: the video loop counts this as a failure, it must not be undone here
+		// (with sound on, a stream that disappeared was never noticed and no backup taken)
+		case NDIlib_frame_type_none:
+			break;
 		// Everything else
 		default:
 			log[log::debug] << "Unknown message found.";
