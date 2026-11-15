@@ -515,7 +515,9 @@ Parameter packet should be const, but the woudn't work with the fake ffmpeg (lib
         bool RawAVFile::decode_video_frame(index_t idx, AVPacket &packet, AVFrame *av_frame, bool &keep_packet) {
             keep_packet = false;
 
-            if (avcodec_send_packet(video_streams_[idx].ctx.get(), &packet) < 0) {
+            // AVERROR_EOF: the decoder is already being drained at the end of the file, not an error
+            const auto sent = avcodec_send_packet(video_streams_[idx].ctx.get(), &packet);
+            if (sent < 0 && sent != AVERROR_EOF) {
                 log[log::warning] << "Failed to send packet to video decoder";
             }
 
@@ -559,8 +561,9 @@ Parameter packet should be const, but the woudn't work with the fake ffmpeg (lib
 #else
             keep_packet = false;
 
-            if (avcodec_send_packet(audio_streams_[idx].ctx.get(), &packet) < 0) {
-                log[log::warning] << "Failed to send packet to video decoder";
+            const auto sent = avcodec_send_packet(audio_streams_[idx].ctx.get(), &packet);
+            if (sent < 0 && sent != AVERROR_EOF) {
+                log[log::warning] << "Failed to send packet to audio decoder";
             }
 
             auto ret = avcodec_receive_frame(audio_streams_[idx].ctx.get(), av_frame);
